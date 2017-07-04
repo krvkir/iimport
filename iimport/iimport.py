@@ -17,7 +17,7 @@ from IPython.core.magic import register_line_magic
 # JI procedure collector
 #
 
-_tag_re = '^(?:    )*%([a-zA-Z+\-\\/<>*]+)[ ]*'
+_tag_re = '^(?P<indent> *)%(?P<tagcode>[a-zA-Z+\-\\/<>*]+) *'
 tags = {
     '<': 'BEGIN_PROC',
     '>': 'END_PROC',
@@ -46,7 +46,12 @@ def consumer(func):
 def fetch_tag(destination, opts={}):
     tag_re = re.compile(_tag_re)
 
+    # Things to be pushed to coroutines chain
+    # Line following after tag
     line_out = None
+    # Dict of metainformation collected
+    meta = {}
+
     while True:
         line = (yield line_out)
         while line is None:
@@ -55,37 +60,65 @@ def fetch_tag(destination, opts={}):
         tag = 'CODE'
         m = tag_re.match(line)
         if m:
-            tagcode = m.group(1)
+            # fetch tag from tagcode
+            tagcode = m.group('tagcode')
             if tagcode in tags:
                 tag = tags[tagcode]
                 line = line[len(m.group(0)):]
                 logging.debug("Found tag: %s" % tag)
+            # save indent to substract it from procedure lines
+            indent = m.group('indent')
+            assert len(indent) % 4 == 0
+            meta['indent'] = indent
 
         # If processing is disabled, ignore all tags
         if opts.get('enabled', True):
-            line_out = destination.send((tag, line))
+            line_out = destination.send((tag, line, meta))
         else:
             if tag in ['BEGIN_PROC']:
                 line_out = None
             else:
                 line_out = line
 
+
+def proc_begin(m_name, meta):
+    proc = {}
+    proc['name'] = m_name.group(1)
+    param_entries = [[s.strip() for s in S.split('=')] for S in m_name.group(2).split(',')]
+    proc['param_names'] = [kv[0] for kv in param_entries]
+    proc['param_defaults'] = [kv[1] if len(kv) == 2 else None for kv in param_entries]
+    proc['results'] = [s.strip() for s in m_name.group(3).split(',')]
+    proc['body'] =\
+        ['"""', 'Parameters:'] +\
+        [':param %s' % (f'{k}={v}' if v else k) for k, v in zip(proc['param_names'], proc['param_defaults'])] +\
+        ["", "Returns:"] + ['%s' % s for s in proc['results']] + ['"""']
+    proc['indent'] = meta['indent']
+    return proc
+
+def proc_add_line(proc, line, meta):
+    assert line.startswith(proc['indent'])
+    proc['body'].append(line[len(proc['indent']):])
+
+def proc_end(proc, meta):
+    proc['body'].append('return %s' % ', '.join(proc['results']))
+    text = "\ndef %s(%s):\n" % (
+        proc['name'],
+        ', '.join(f'{k}={v}' if v else k for k, v in zip(proc['param_names'], proc['param_defaults']))
+    )
+    text += '\n'.join('    %s' % s for s in proc['body'])
+    return text
+
 @consumer
 def collect_proc(destination):
     # Stack of procedures in declaration (to support procedures declaration nesting)
     stack = []
     # Procedure data
-    proc = {}
-    proc_name = None
-    proc_param_names = None
-    proc_param_defaults = None
-    proc_results = None
-    proc_body = None
+    proc = None
 
     procname_re = re.compile(_procname_re)
 
     # Processing all the input line by line
-    tag, line = yield
+    tag, line, meta = yield
     while True:
         line_out = None
 
@@ -94,15 +127,17 @@ def collect_proc(destination):
             # (or to the end of the file).
             while tag != 'END_SKIP':
                 if tag in ['BEGIN_PROC']:
-                    tag, line = yield
+                    tag, line, meta = yield
                 else:
-                    tag, line = yield destination.send((None, line))
+                    tag, line, meta = yield destination.send((None, line, meta))
+
+            tag, line, meta = yield destination.send(('CODE', line, meta))
 
         if tag == 'SKIP_LINE':
             # Execute line in the notebook but do not add it to the procedure.
             # (Useful for in-notebook plotting or debug output which is of no need
             # in the non-interactive code.)
-            line_out = destination.send((tag, line))
+            line_out = destination.send((tag, line, meta))
         elif tag == 'BEGIN_PROC':
             # Check procedure name for correctness and parse it into name, params and results
             #
@@ -111,26 +146,18 @@ def collect_proc(destination):
             # in global namespace to be importable.)
             m_name = procname_re.match(line)
             if m_name:
-                stack.append((proc_name, proc_param_names, proc_param_defaults, proc_results, proc_body))
-                proc_name = m_name.group(1)
-                param_entries = [[s.strip() for s in S.split('=')] for S in m_name.group(2).split(',')]
-                proc_param_names = [kv[0] for kv in param_entries]
-                proc_param_defaults = [kv[1] if len(kv) == 2 else None for kv in param_entries]
-                proc_results = [s.strip() for s in m_name.group(3).split(',')]
-                proc_body =\
-                    ['"""', 'Parameters:'] +\
-                    [':param %s' % (f'{k}={v}' if v else k) for k, v in zip(proc_param_names, proc_param_defaults)] +\
-                    ["", "Returns:"] + ['%s' % s for s in proc_results] + ['"""']
+                stack.append(proc)
+                proc = proc_begin(m_name, meta)
             else:
                 logging.error('Wrong proc name: %s' % line)
         elif tag == 'CODE':
-            if proc_name is not None:
+            if proc is not None:
                 # Add line to the procedure body.
-                proc_body.append(line)
-                line_out = destination.send(('PROC_CODE', line))
+                proc_add_line(proc, line, meta)
+                line_out = destination.send(('PROC_CODE', line, meta))
             else:
-                line_out = destination.send(('CODE', line))
-        elif tag == 'END_PROC' and proc_name is not None:
+                line_out = destination.send(('CODE', line, meta))
+        elif tag == 'END_PROC' and proc is not None:
             # Stop collecting the procedure and declare it.
             # It this one is inside another, then add to the outer one the line like this:
             #
@@ -138,22 +165,17 @@ def collect_proc(destination):
             #
             # which is equivalent transformation if the outer proc uses only declared results
             # of the inner one.
-            proc_body.append('return %s' % ', '.join(proc_results))
-            text = "\ndef %s(%s):\n" % (
-                proc_name,
-                ', '.join(f'{k}={v}' if v else k for k, v in zip(proc_param_names, proc_param_defaults))
-            )
-            text += '\n'.join('    %s' % s for s in proc_body)
-            call = "%s = %s(%s)" % (', '.join(proc_results), proc_name, ', '.join(proc_param_names))
-            proc_name, proc_param_names, proc_param_defaults, proc_results, proc_body = stack.pop()
-            if proc_name is not None:
-                proc_body.append(call)
+            text = proc_end(proc, meta)
+            call = proc['indent'] + "%s = %s(%s)" % (', '.join(proc['results']), proc['name'], ', '.join(proc['param_names']))
+            proc = stack.pop()
+            if proc is not None:
+                proc['body'].append(call)
             logging.debug(f'Defining a function:{text}')
-            line_out = destination.send((tag, text))
+            line_out = destination.send((tag, text, meta))
         else:
-            logging.error("Wrong JI state: tag=%s, line=%s" % (tag, line))
+            logging.error("Wrong state: tag=%s, line=%s" % (tag, line, meta))
 
-        tag, line = (yield line_out)
+        tag, line, meta = (yield line_out)
 
 @consumer
 def output_filter(is_module=False):
@@ -167,7 +189,7 @@ def output_filter(is_module=False):
     """
     line_out = None
     while True:
-        tag, line = (yield line_out)
+        tag, line, meta = (yield line_out)
         line_out = line if not is_module or (tag in ['CODE', 'END_PROC']) else None
 
 #
@@ -214,6 +236,11 @@ class NotebookLoader(object):
         self.path = path
         self.chain = fetch_tag(collect_proc(output_filter(is_module=True)))
 
+        newline_cutter = re.compile('\n\n\n\n*')
+        self.output_filters = [
+            lambda s: newline_cutter.sub('\n\n\n', s),
+            ]
+
     def load_module(self, fullname):
         path = find_notebook(fullname, self.path)
 
@@ -237,6 +264,7 @@ class NotebookLoader(object):
             exec(code, mod.__dict__)
             mod.__code__ = code
         except Exception as e:
+            logging.error("Exception during module code execution: %s" % e)
             logging.error("Executing module code:\n" + numbered_code)
             raise e
         finally:
@@ -258,7 +286,11 @@ class NotebookLoader(object):
                     lines_out.append('\n')
             elif cell.cell_type == 'markdown':
                 lines_out += ['# ' + l.replace('\n', '') for l in cell_lines]
-        return '\n'.join(lines_out)
+        text = '\n'.join(lines_out)
+
+        for f in self.output_filters:
+            text = f(text)
+        return text
 
 
 

@@ -7,15 +7,35 @@
 
 Both ease of experiments and reusability are valuable:
 
-- if code is shaped in functions you can for example make a =luigi= pipeline or =dask= computational graph out of it, implement results caching to shorten computation time, launch your pipeline with different inputs and so on. 
-- if code is in linear notebook form you can explore data, do complex visualizations, make interactive widgets.
+- If code is shaped in functions you can for example make a =luigi= pipeline or =dask= computational graph out of it, implement results caching to shorten computation time, launch your pipeline with different inputs and so on. 
+- If code is in linear notebook form you can explore data, do complex visualizations, make interactive widgets.
 
 * The solution
 
-This module attempts to solve this contradiction, allowing you to write your code in the notebook in the exploratory manner, and when you fell it reached maturity -- to highlight logically independent pieces of code with macro commands and import these pieces from other places without changing the linear notebook structure.
+This module attempts to solve this contradiction, allowing you to write your code in the notebook in the exploratory manner, and when you fell it reached maturity -- to highlight logically independent pieces of code with macro commands and import these pieces from other places without changing the linear notebook structure. After that you still are able to work with the notebook in the linear manner.
+
+It implements two things:
+- very simple markup language to define procedures and exclude unwanted (debug, visualization) code;
+- import mechanics to process marked up notebook file into set of procedures.
+
+There's no intermediate python files, you work with the same code both in notebook interface and as imported procedures.
 
 
 * How it works
+
+The module registers IPython extension. When you load it with =%load_ext iipython=, it enables markup filter and provides you =%iimport= magic to import other notebooks.
+
+In import mode (when you do =%iimport notebook as nb=) it processes the input file line by line and passes it through a pipeline of filters. These filters collect all procedure definitions and their code. When procedure ends, filters pass its body to the output so the procedure is declared as top-level function.
+
+In the notebook it simply ignores all markup commands so you can execute marked up code as if there's no markup.
+
+For technical details see:
+- [[https://www.python.org/dev/peps/pep-0342/][PEP 342 -- Coroutines via Enhanced Generators]]
+- IPython docs:
+  - [[http://ipython.readthedocs.io/en/stable/config/inputtransforms.html][Custom input transformation]]
+  - [[http://ipython.readthedocs.io/en/stable/config/custommagics.html][Defining custom magics]]
+- Jupyter notebook docs:
+  - [[http://jupyter-notebook.readthedocs.io/en/latest/examples/Notebook/Importing%20Notebooks.html][Importing Jupyter Notebooks as Modules]]
 
 
 * Example
@@ -61,9 +81,9 @@ sums = df.groupby('a')['b'].sum()
 %end
 #+END_SRC
 
-This does not affect your code interactive execution: you still can run your cells and will notice no difference.
+This does not affect your code at interactive execution: you still can run your cells and will notice no difference.
 
-But now you can import your notebook and reuse its code in another file like this:
+But now you can import your notebook and reuse its code in another file:
 
 #+BEGIN_SRC python -n
 %load_ext iimport
@@ -95,7 +115,7 @@ def calc_sums(f1_path, f2_path):
 
 Note how the code transformed:
 
-- the code inside =%def= and =%end= lines became a function;
+- the code between =%def= and =%end= lines became a function;
 - =return= statement was inserted in the end of it;
 - lines starting with =%-= were excluded from the code.
 
@@ -172,11 +192,13 @@ After placing tokens it looks like this:
   dir_path = './some_dir/'
 
   %def calc_sum(f1_path=f1_path, f2_path=f2_path) -> sum
+  %def load_df(f1_path=f1_path, f2_path=f2_path) -> df
   # Load data
   df1 = pd.read_csv(f1_path, sep=';').set_index('id1')
   df2 = pd.read_csv(f2_path, sep=',').set_index('id2')
   df = df1.join(df2, on='id2', how='inner').dropna(how='any')
   %- df.info()
+  %end
 
   sums = df.groupby('a')['b'].sum()
   %end
@@ -190,7 +212,7 @@ After placing tokens it looks like this:
   plt.grid()
   %*/
 
-  %def load_objs(df=df, ref_path=ref_path, dir_path=dir_path) -> objs
+  %def load_objs(df, ref_path=ref_path) -> objs
 
   %def load_ref(ref_path=ref_path) -> ref
   # Load an important reference and prepare it for usage
@@ -203,11 +225,11 @@ After placing tokens it looks like this:
   # Load and process some files from disk
   objs = {}
   for ix, row in df.iterrows():
-      fpath = dir_path + row['file_path']
+      fpath = row['file_path']
       if os.path.exists(fpath):
 
-          %def load_obj(fpath=fpath) -> obj
-          with open(fpath, 'r') as f:
+          %def load_obj(fpath, dir_path=dir_path) -> obj
+          with open(dir_path + fpath, 'r') as f:
               # Load an object from the file
               obj = json.load(f)
               # Remove some unused fields if any
@@ -222,15 +244,133 @@ After placing tokens it looks like this:
 
           objs[ix] = obj
   %end
-
 #+END_SRC
 
 See what happened:
 - we marked code for plotting sums histogram not to be included on import time using multiline excluding tag (=%/*= ... =%*/=), so it will not clutter the output
-- we used two nested procedures (=load_ref= and =load_obj=) inside another one (=load_objs=)
+- we used nested functions: 
+  - =load_df= inside =calc_sum=
+  - =load_ref= and =load_obj= inside =load_objs=
 - we set the default values for procedure parameters
 
 Now let's see what we get on import time:
+
+#+BEGIN_SRC python -n
+  import os
+  import json
+  import pandas as pd
+  import matplotlib.pyplot as plt
+
+
+  # Configure input data
+  f1_path = './scenario1/file1.csv'
+  f2_path = './scenario1/file2.csv'
+  ref_path = './some_useful_reference.csv'
+  dir_path = './some_dir/'
+
+
+  def load_df(f1_path=f1_path, f2_path=f2_path):
+      """
+      Parameters:
+      :param f1_path=f1_path
+      :param f2_path=f2_path
+
+      Returns:
+      df
+      """
+      # Load data
+      df1 = pd.read_csv(f1_path, sep=';').set_index('id1')
+      df2 = pd.read_csv(f2_path, sep=',').set_index('id2')
+      df = df1.join(df2, on='id2', how='inner').dropna(how='any')
+      return df
+
+  def calc_sum(f1_path=f1_path, f2_path=f2_path):
+      """
+      Parameters:
+      :param f1_path=f1_path
+      :param f2_path=f2_path
+
+      Returns:
+      sum
+      """
+      df = load_df(f1_path, f2_path)
+
+      sums = df.groupby('a')['b'].sum()
+      return sum
+
+
+  def load_ref(ref_path=ref_path):
+      """
+      Parameters:
+      :param ref_path=ref_path
+
+      Returns:
+      ref
+      """
+      # Load an important reference and prepare it for usage
+      ref = pd.read_csv(ref_path, sep=';', encoding='cp1251').set_index('ref_id')
+      # Drop rows using some condigion
+      ref['calculated_field'] = ref['field_a'] * ref['field_b'] + ref['field_c']
+      ref = ref[ref.calculated_field > 10]
+      return ref
+
+
+  def load_obj(fpath, dir_path=dir_path):
+      """
+      Parameters:
+      :param fpath
+      :param dir_path=dir_path
+
+      Returns:
+      obj
+      """
+      with open(dir_path + fpath, 'r') as f:
+          # Load an object from the file
+          obj = json.load(f)
+          # Remove some unused fields if any
+          if 'garbage' in obj:
+              del obj['garbage']
+          if 'trash' in obj:
+              del obj['trash']
+          # Load some data from reference table into an object
+          if 'ref_id' in obj:
+              obj['ref'] = ref.loc[obj['ref_id']]
+      return obj
+
+
+  def load_objs(df, ref_path=ref_path):
+      """
+      Parameters:
+      :param df
+      :param ref_path=ref_path
+
+      Returns:
+      objs
+      """
+
+      ref = load_ref(ref_path)
+      # Load and process some files from disk
+      objs = {}
+      for ix, row in df.iterrows():
+          fpath = row['file_path']
+          if os.path.exists(fpath):
+
+              obj = load_obj(fpath, dir_path)
+
+              objs[ix] = obj
+      return objs
+#+END_SRC
+
+See how all the procedures (including nested ones) became top-level functions, and how these procedures folded into function calls. Now these functions can be easily chained together:
+
+#+BEGIN_SRC python -n
+  %load_ext iimport
+  %iimport notebook as nb
+  from dask import delayed
+
+  df = delayed(nb.load_df())
+  objs = delayed(nb.load_objs(df))
+#+END_SRC
 
 * References
 
@@ -241,9 +381,9 @@ Now let's see what we get on import time:
 
 Note that beginning and ending tokens may be in different notebook cells, so that you can split a procedure into several cells.
 
-- Skip this line on import: =%-= or =%//%=
+- Skip this line on import: =%-= or =%//=
 - Skip multiple lines on import: =%/*= ... =%*/=
-- Include this line on import (but skip in the notebook): =%+=
+- TODO Include this line on import (but skip in the notebook): =%+=
 
 ** List of commands
 
