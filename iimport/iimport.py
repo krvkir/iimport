@@ -14,7 +14,7 @@ from IPython.core.interactiveshell import InteractiveShell
 from IPython.core.magic import register_line_magic
 
 #
-# JI procedure collector
+# Procedure collector
 #
 
 _tag_re = '^(?P<indent> *)%(?P<tagcode>[a-zA-Z+\-\\/<>*]+) *'
@@ -193,7 +193,7 @@ def output_filter(is_module=False):
         line_out = line if not is_module or (tag in ['CODE', 'END_PROC']) else None
 
 #
-# JI-aware .ipynb import mechanism
+# .ipynb import mechanism
 #
 
 def find_notebook(fullname, path=None):
