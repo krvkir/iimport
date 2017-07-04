@@ -1,0 +1,255 @@
+#+TITLE: iimport
+
+* The problem
+
+1. If you write linear code in the notebook, it's easy to do experiments and interactively debug your code, but you can't reuse the code and long notebooks usually are hard to read and comprehend.
+2. In contrary, if you use structural/object-oriented programming approach and shape your code into objects, functions and modules, you can reuse it but need special tools to debug, and prototyping and experimenting becomes more complicated.
+
+Both ease of experiments and reusability are valuable:
+
+- if code is shaped in functions you can for example make a =luigi= pipeline or =dask= computational graph out of it, implement results caching to shorten computation time, launch your pipeline with different inputs and so on. 
+- if code is in linear notebook form you can explore data, do complex visualizations, make interactive widgets.
+
+* The solution
+
+This module attempts to solve this contradiction, allowing you to write your code in the notebook in the exploratory manner, and when you fell it reached maturity -- to highlight logically independent pieces of code with macro commands and import these pieces from other places without changing the linear notebook structure.
+
+
+* How it works
+
+
+* Example
+
+** Basic
+
+Let's assume you wrote the piece of code in =notebook1.ipynb=:
+
+#+BEGIN_SRC python -n
+import pandas as pd
+
+f1_path = './scenario1/file1.csv'
+f2_path = './scenario1/file2.csv'
+
+df1 = pd.read_csv(f1_path, sep=';').set_index('id1')
+df2 = pd.read_csv(f2_path, sep=',').set_index('id2')
+df = df1.join(df2, on='id2', how='inner').dropna(how='any')
+df.info()
+
+sums = df.groupby('a')['b'].sum()
+sums.plt.hist(bins=50)
+#+END_SRC
+
+You prototyped the code, debugged it and tested on one data set (say, on scenario 1).
+
+Now you want to get this calculated =sums= data in the other file and maybe use different paths to source data files. You modify your notebook:
+
+#+BEGIN_SRC python -n
+import pandas as pd
+%load_ext iimport
+
+f1_path = './scenario1/file1.csv'
+f2_path = './scenario1/file2.csv'
+
+%def calc_sums(f1_path, f2_path) -> sums
+df1 = pd.read_csv(f1_path, sep=';').set_index('id1')
+df2 = pd.read_csv(f2_path, sep=',').set_index('id2')
+df = df1.join(df2, on='id2', how='inner').dropna(how='any')
+%- df.info()
+
+sums = df.groupby('a')['b'].sum()
+%- sums.plt.hist(bins=50)
+%end
+#+END_SRC
+
+This does not affect your code interactive execution: you still can run your cells and will notice no difference.
+
+But now you can import your notebook and reuse its code in another file like this:
+
+#+BEGIN_SRC python -n
+%load_ext iimport
+%iimport notebook1 as nb1
+
+f1_path = './scenario2/file1.csv'
+f2_path = './scenario2/file2.csv'
+
+sums = nb1.calc_sums(f1_path, f2_path)
+#+END_SRC
+
+If you want to see the exact code of =nb1= module, you can either enable debug logging (=import logging; logging.basicConfig(level=logging.DEBUG)=) and the code will be printed on =%iimport= execution, or you may print =nb1.__code__= variable. If you do you'll see this:
+
+#+BEGIN_SRC python -n
+import pandas as pd
+get_ipython().magic('load_ext iimport')
+
+f1_path = './scenario1/file1.csv'
+f2_path = './scenario1/file2.csv'
+
+def calc_sums(f1_path, f2_path):
+    df1 = pd.read_csv(f1_path, sep=';').set_index('id1')
+    df2 = pd.read_csv(f2_path, sep=',').set_index('id2')
+    df = df1.join(df2, on='id2', how='inner').dropna(how='any')
+    
+    sums = df.groupby('a')['b'].sum()
+    return sums
+#+END_SRC
+
+Note how the code transformed:
+
+- the code inside =%def= and =%end= lines became a function;
+- =return= statement was inserted in the end of it;
+- lines starting with =%-= were excluded from the code.
+
+
+** Advanced
+
+Let us now consider slightly more complicated code:
+
+#+BEGIN_SRC python -n
+  import os
+  import json
+  import pandas as pd
+  import matplotlib.pyplot as plt
+
+  # Configure input data
+  f1_path = './scenario1/file1.csv'
+  f2_path = './scenario1/file2.csv'
+  ref_path = './some_useful_reference.csv'
+  dir_path = './some_dir/'
+
+  # Load data
+  df1 = pd.read_csv(f1_path, sep=';').set_index('id1')
+  df2 = pd.read_csv(f2_path, sep=',').set_index('id2')
+  df = df1.join(df2, on='id2', how='inner').dropna(how='any')
+  df.info()
+
+  sums = df.groupby('a')['b'].sum()
+
+  # Make some complicated plot that should not appear in code for import
+  sums.plt.hist(bins=50)
+  plt.title('Histogram of sums by a of column b')
+  plt.xlim(0, 10)
+  plt.ylim(-3, 3)
+  plt.grid()
+
+  # Load an important reference and prepare it for usage
+  ref = pd.read_csv(ref_path, sep=';', encoding='cp1251').set_index('ref_id')
+  # Drop rows using some condigion
+  ref['calculated_field'] = ref['field_a'] * ref['field_b'] + ref['field_c']
+  ref = ref[ref.calculated_field > 10]
+
+  # Load and process some files from disk
+  datas = {}
+  for ix, row in df.iterrows():
+      fpath = dir_path + row['file_path']
+      if os.path.exists(fpath):
+          with open(fpath, 'r') as f:
+              # Load an object from the file
+              obj = json.load(f)
+              # Remove some unused fields if any
+              if 'garbage' in obj:
+                  del obj['garbage']
+              if 'trash' in obj:
+                  del obj['trash']
+              # Load some data from reference table into an object
+              if 'ref_id' in obj:
+                  obj['ref'] = ref.loc[obj['ref_id']]
+          datas[ix] = obj
+
+#+END_SRC
+
+After placing tokens it looks like this:
+
+#+BEGIN_SRC python -n
+  import os
+  import json
+  import pandas as pd
+  import matplotlib.pyplot as plt
+
+  # Configure input data
+  f1_path = './scenario1/file1.csv'
+  f2_path = './scenario1/file2.csv'
+  ref_path = './some_useful_reference.csv'
+  dir_path = './some_dir/'
+
+  %def calc_sum(f1_path=f1_path, f2_path=f2_path) -> sum
+  # Load data
+  df1 = pd.read_csv(f1_path, sep=';').set_index('id1')
+  df2 = pd.read_csv(f2_path, sep=',').set_index('id2')
+  df = df1.join(df2, on='id2', how='inner').dropna(how='any')
+  %- df.info()
+
+  sums = df.groupby('a')['b'].sum()
+  %end
+
+  %/*
+  # Make some complicated plot that should not appear in code for import
+  sums.plt.hist(bins=50)
+  plt.title('Histogram of sums by a of column b')
+  plt.xlim(0, 10)
+  plt.ylim(-3, 3)
+  plt.grid()
+  %*/
+
+  %def load_objs(df=df, ref_path=ref_path, dir_path=dir_path) -> objs
+
+  %def load_ref(ref_path=ref_path) -> ref
+  # Load an important reference and prepare it for usage
+  ref = pd.read_csv(ref_path, sep=';', encoding='cp1251').set_index('ref_id')
+  # Drop rows using some condigion
+  ref['calculated_field'] = ref['field_a'] * ref['field_b'] + ref['field_c']
+  ref = ref[ref.calculated_field > 10]
+  %end
+
+  # Load and process some files from disk
+  objs = {}
+  for ix, row in df.iterrows():
+      fpath = dir_path + row['file_path']
+      if os.path.exists(fpath):
+
+          %def load_obj(fpath=fpath) -> obj
+          with open(fpath, 'r') as f:
+              # Load an object from the file
+              obj = json.load(f)
+              # Remove some unused fields if any
+              if 'garbage' in obj:
+                  del obj['garbage']
+              if 'trash' in obj:
+                  del obj['trash']
+              # Load some data from reference table into an object
+              if 'ref_id' in obj:
+                  obj['ref'] = ref.loc[obj['ref_id']]
+          %end
+
+          objs[ix] = obj
+  %end
+
+#+END_SRC
+
+See what happened:
+- we marked code for plotting sums histogram not to be included on import time using multiline excluding tag (=%/*= ... =%*/=), so it will not clutter the output
+- we used two nested procedures (=load_ref= and =load_obj=) inside another one (=load_objs=)
+- we set the default values for procedure parameters
+
+Now let's see what we get on import time:
+
+* References
+
+** List of tokens
+
+- Beginning of the procedure: =%<= or =%def=
+- End of the procedure: =%>= or =%end=
+
+Note that beginning and ending tokens may be in different notebook cells, so that you can split a procedure into several cells.
+
+- Skip this line on import: =%-= or =%//%=
+- Skip multiple lines on import: =%/*= ... =%*/=
+- Include this line on import (but skip in the notebook): =%+=
+
+** List of commands
+
+- =%iimport= -- import ipynb file. Examples of correct commands:
+  - =%iimport notebook1=
+  - =%iimport notebook1 as nb1=
+  - =%iimport ../notebooks/2017 Some notebook as some_nb=
+  Note that file extension (=.ipynb=) should be omitted.
+- =%iimport_enabled 1= -- enable parsing of the code and defining functions inside current notebook. Useful for debugging, by default is switched off.
