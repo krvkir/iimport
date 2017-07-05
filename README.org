@@ -184,6 +184,7 @@ After placing tokens it looks like this:
   import json
   import pandas as pd
   import matplotlib.pyplot as plt
+  %load_ext iimport
 
   # Configure input data
   f1_path = './scenario1/file1.csv'
@@ -212,7 +213,7 @@ After placing tokens it looks like this:
   plt.grid()
   %*/
 
-  %def load_objs(df, ref_path=ref_path) -> objs
+  %def load_objs(df, ref_path=ref_path, dir_path=dir_path) -> objs
 
   %def load_ref(ref_path=ref_path) -> ref
   # Load an important reference and prepare it for usage
@@ -225,11 +226,11 @@ After placing tokens it looks like this:
   # Load and process some files from disk
   objs = {}
   for ix, row in df.iterrows():
-      fpath = row['file_path']
+      fpath = dir_path + row['file_path']
       if os.path.exists(fpath):
 
-          %def load_obj(fpath, dir_path=dir_path) -> obj
-          with open(dir_path + fpath, 'r') as f:
+          %def load_obj(fpath, ref) -> obj
+          with open(fpath, 'r') as f:
               # Load an object from the file
               obj = json.load(f)
               # Remove some unused fields if any
@@ -315,7 +316,7 @@ Now let's see what we get on import time:
       return ref
 
 
-  def load_obj(fpath, dir_path=dir_path):
+  def load_obj(fpath, ref):
       """
       Parameters:
       :param fpath
@@ -324,7 +325,7 @@ Now let's see what we get on import time:
       Returns:
       obj
       """
-      with open(dir_path + fpath, 'r') as f:
+      with open(fpath, 'r') as f:
           # Load an object from the file
           obj = json.load(f)
           # Remove some unused fields if any
@@ -338,7 +339,7 @@ Now let's see what we get on import time:
       return obj
 
 
-  def load_objs(df, ref_path=ref_path):
+  def load_objs(df, ref_path=ref_path, dir_path=dir_path):
       """
       Parameters:
       :param df
@@ -352,10 +353,10 @@ Now let's see what we get on import time:
       # Load and process some files from disk
       objs = {}
       for ix, row in df.iterrows():
-          fpath = row['file_path']
+          fpath = dir_path + row['file_path']
           if os.path.exists(fpath):
 
-              obj = load_obj(fpath, dir_path)
+              obj = load_obj(fpath, ref)
 
               objs[ix] = obj
       return objs
@@ -370,6 +371,7 @@ See how all the procedures (including nested ones) became top-level functions, a
 
   df = delayed(nb.load_df())
   objs = delayed(nb.load_objs(df))
+  objs.compute()
 #+END_SRC
 
 * References
