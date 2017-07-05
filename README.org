@@ -1,29 +1,29 @@
 #+TITLE: iimport
 
-* The problem
+* Problem
 
-1. If you write linear code in the notebook, it's easy to do experiments and interactively debug your code, but you can't reuse the code and long notebooks usually are hard to read and comprehend.
-2. In contrary, if you use structural/object-oriented programming approach and shape your code into objects, functions and modules, you can reuse it but need special tools to debug, and prototyping and experimenting becomes more complicated.
+1. When you write linear code in the notebook, it's easy to do experiments and interactively debug your code, but you can't reuse the code and long notebooks usually are hard to read and comprehend.
+2. In contrast, when you use structural/object-oriented programming approach and shape your code into objects, functions and modules, you can reuse it but you'll need special tools to debug, hence prototyping and experimenting become more complicated.
 
-Both ease of experiments and reusability are valuable:
+Both the ease of experiment and reusability are valuable:
 
 - If code is shaped in functions you can for example make a =luigi= pipeline or =dask= computational graph out of it, implement results caching to shorten computation time, launch your pipeline with different inputs and so on. 
 - If code is in linear notebook form you can explore data, do complex visualizations, make interactive widgets.
 
-* The solution
+* Solution
 
-This module attempts to solve this contradiction, allowing you to write your code in the notebook in the exploratory manner, and when you fell it reached maturity -- to highlight logically independent pieces of code with macro commands and import these pieces from other places without changing the linear notebook structure. After that you still are able to work with the notebook in the linear manner.
+This module attempts to solve this experimentability vs reusability tradeoff, allowing you to write your code in the notebook in the exploratory manner, and when you fell that it has reached maturity -- to highlight logically independent pieces of code with macro commands and to import these pieces to other places without diverging from the linear notebook structure. You will still be able to continue with the notebook in the linear manner.
 
-It implements two things:
-- very simple markup language to define procedures and exclude unwanted (debug, visualization) code;
-- import mechanics to process marked up notebook file into set of procedures.
+Two things are implemented:
+- very simple markup language that defines procedures and excludes unwanted (debug, visualization) code;
+- import mechanics that process marked-up notebook file into a set of procedures.
 
-There's no intermediate python files, you work with the same code both in notebook interface and as imported procedures.
+There are  no intermediate python files, you work with the same code both in notebook interface and as imported procedures.
 
 
 * How it works
 
-The module registers IPython extension. When you load it with =%load_ext iipython=, it enables markup filter and provides you =%iimport= magic to import other notebooks.
+The module registers IPython extension. When loaded with =%load_ext iipython= statement, it enables markup filter and provides you with =%iimport= magic to import other notebooks.
 
 In import mode (when you do =%iimport notebook as nb=) it processes the input file line by line and passes it through a pipeline of filters. These filters collect all procedure definitions and their code. When procedure ends, filters pass its body to the output so the procedure is declared as top-level function.
 
@@ -38,11 +38,11 @@ For technical details see:
   - [[http://jupyter-notebook.readthedocs.io/en/latest/examples/Notebook/Importing%20Notebooks.html][Importing Jupyter Notebooks as Modules]]
 
 
-* Example
+* Examples
 
-** Basic
+** Simple example
 
-Let's assume you wrote the piece of code in =notebook1.ipynb=:
+Suppose you've saved the following piece of code in =notebook1.ipynb=:, and the code was prototyped, debugged and tested on one data set (say, on scenario 1).
 
 #+BEGIN_SRC python -n
 import pandas as pd
@@ -59,9 +59,7 @@ sums = df.groupby('a')['b'].sum()
 sums.plt.hist(bins=50)
 #+END_SRC
 
-You prototyped the code, debugged it and tested on one data set (say, on scenario 1).
-
-Now you want to get this calculated =sums= data in the other file and maybe use different paths to source data files. You modify your notebook:
+Now you want to repeat those =sums= calculations on some other data, and perhaps path to that data is different. You modify your notebook as follows:
 
 #+BEGIN_SRC python -n
 import pandas as pd
@@ -81,7 +79,7 @@ sums = df.groupby('a')['b'].sum()
 %end
 #+END_SRC
 
-This does not affect your code at interactive execution: you still can run your cells and will notice no difference.
+Those modifications won't affect interactive execution of your code: you can still run your cells and won't notice any difference.
 
 But now you can import your notebook and reuse its code in another file:
 
@@ -95,7 +93,7 @@ f2_path = './scenario2/file2.csv'
 sums = nb1.calc_sums(f1_path, f2_path)
 #+END_SRC
 
-If you want to see the exact code of =nb1= module, you can either enable debug logging (=import logging; logging.basicConfig(level=logging.DEBUG)=) and the code will be printed on =%iimport= execution, or you may print =nb1.__code__= variable. If you do you'll see this:
+If you want to see the acual code from =nb1= module, you can either enable debug logging (=import logging; logging.basicConfig(level=logging.DEBUG)=) and the code will be printed on =%iimport= execution, or you may set =nb1.__code__= variable, then you'll see this output:
 
 #+BEGIN_SRC python -n
 import pandas as pd
@@ -113,16 +111,16 @@ def calc_sums(f1_path, f2_path):
     return sums
 #+END_SRC
 
-Note how the code transformed:
+Note the following code transformations:
 
 - the code between =%def= and =%end= lines became a function;
-- =return= statement was inserted in the end of it;
+- =return= statement was inserted at the end of it;
 - lines starting with =%-= were excluded from the code.
 
 
-** Advanced
+** Advanced example
 
-Let us now consider slightly more complicated code:
+Let's consider somewhat more complicated code:
 
 #+BEGIN_SRC python -n
   import os
@@ -144,20 +142,20 @@ Let us now consider slightly more complicated code:
 
   sums = df.groupby('a')['b'].sum()
 
-  # Make some complicated plot that should not appear in code for import
+  # Make complicated plot that should not appear in imported code
   sums.plt.hist(bins=50)
   plt.title('Histogram of sums by a of column b')
   plt.xlim(0, 10)
   plt.ylim(-3, 3)
   plt.grid()
 
-  # Load an important reference and prepare it for usage
+  # Load important reference and prepare it for usage
   ref = pd.read_csv(ref_path, sep=';', encoding='cp1251').set_index('ref_id')
-  # Drop rows using some condigion
+  # Drop rows using some condition
   ref['calculated_field'] = ref['field_a'] * ref['field_b'] + ref['field_c']
   ref = ref[ref.calculated_field > 10]
 
-  # Load and process some files from disk
+  # Load and process files from disk
   datas = {}
   for ix, row in df.iterrows():
       fpath = dir_path + row['file_path']
@@ -177,7 +175,7 @@ Let us now consider slightly more complicated code:
 
 #+END_SRC
 
-After placing tokens it looks like this:
+After placing tokens the code should look like this:
 
 #+BEGIN_SRC python -n
   import os
@@ -205,7 +203,7 @@ After placing tokens it looks like this:
   %end
 
   %/*
-  # Make some complicated plot that should not appear in code for import
+  # Make complicated plot that should not appear in imported code
   sums.plt.hist(bins=50)
   plt.title('Histogram of sums by a of column b')
   plt.xlim(0, 10)
@@ -216,14 +214,14 @@ After placing tokens it looks like this:
   %def load_objs(df, ref_path=ref_path, dir_path=dir_path) -> objs
 
   %def load_ref(ref_path=ref_path) -> ref
-  # Load an important reference and prepare it for usage
+  # Load important reference and prepare it for usage
   ref = pd.read_csv(ref_path, sep=';', encoding='cp1251').set_index('ref_id')
-  # Drop rows using some condigion
+  # Drop rows using some condition
   ref['calculated_field'] = ref['field_a'] * ref['field_b'] + ref['field_c']
   ref = ref[ref.calculated_field > 10]
   %end
 
-  # Load and process some files from disk
+  # Load and process files from disk
   objs = {}
   for ix, row in df.iterrows():
       fpath = dir_path + row['file_path']
@@ -247,12 +245,12 @@ After placing tokens it looks like this:
   %end
 #+END_SRC
 
-See what happened:
-- we marked code for plotting sums histogram not to be included on import time using multiline excluding tag (=%/*= ... =%*/=), so it will not clutter the output
+This is what happened:
+- The code for plotting sums histogram was excluded from import by marking it with multiline exclusion tag (=%/*= ... =%*/=), so it won't clutter the output
 - we used nested functions: 
   - =load_df= inside =calc_sum=
   - =load_ref= and =load_obj= inside =load_objs=
-- we set the default values for procedure parameters
+- we set default values for procedure parameters
 
 Now let's see what we get on import time:
 
@@ -308,7 +306,7 @@ Now let's see what we get on import time:
       Returns:
       ref
       """
-      # Load an important reference and prepare it for usage
+      # Load important reference and prepare it for usage
       ref = pd.read_csv(ref_path, sep=';', encoding='cp1251').set_index('ref_id')
       # Drop rows using some condigion
       ref['calculated_field'] = ref['field_a'] * ref['field_b'] + ref['field_c']
@@ -362,7 +360,7 @@ Now let's see what we get on import time:
       return objs
 #+END_SRC
 
-See how all the procedures (including nested ones) became top-level functions, and how these procedures folded into function calls. Now these functions can be easily chained together:
+Note that all the procedures (including nested ones) became top-level functions, and that these procedures folded into function calls. Now these functions can be easily chained together:
 
 #+BEGIN_SRC python -n
   %load_ext iimport
@@ -378,10 +376,10 @@ See how all the procedures (including nested ones) became top-level functions, a
 
 ** List of tokens
 
-- Beginning of the procedure: =%<= or =%def=
-- End of the procedure: =%>= or =%end=
+- Beginning of procedure: =%<= or =%def=
+- End of procedure: =%>= or =%end=
 
-Note that beginning and ending tokens may be in different notebook cells, so that you can split a procedure into several cells.
+Note that beginning and ending tokens may be placed in different notebook cells, so that you can split a procedure into several cells.
 
 - Skip this line on import: =%-= or =%//=
 - Skip multiple lines on import: =%/*= ... =%*/=

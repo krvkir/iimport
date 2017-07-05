@@ -28,9 +28,9 @@ tags = {
     '/*': 'BEGIN_SKIP',
     '*/': 'END_SKIP',
 }
-_procname_re = '([a-zA-Z0-9_]+)'\
-               ' *\(([a-zA-Z0-9,_= \'\"]+)\)'\
-               ' *-> *([a-zA-Z0-9_, ]+)'
+_procname_re = '(?P<name>[a-zA-Z0-9_]+)'\
+               ' *\((?P<params>[a-zA-Z0-9.\[\],_= \'\"]+)\)'\
+               ' *-> *(?P<results>[a-zA-Z0-9_, ]+)'
 
 def consumer(func):
     def wrapper(*args, **kwargs):
@@ -81,32 +81,78 @@ def fetch_tag(destination, opts={}):
                 line_out = line
 
 
-def proc_begin(m_name, meta):
-    proc = {}
-    proc['name'] = m_name.group(1)
-    param_entries = [[s.strip() for s in S.split('=')] for S in m_name.group(2).split(',')]
-    proc['param_names'] = [kv[0] for kv in param_entries]
-    proc['param_defaults'] = [kv[1] if len(kv) == 2 else None for kv in param_entries]
-    proc['results'] = [s.strip() for s in m_name.group(3).split(',')]
-    proc['body'] =\
-        ['"""', 'Parameters:'] +\
-        [':param %s' % (f'{k}={v}' if v else k) for k, v in zip(proc['param_names'], proc['param_defaults'])] +\
-        ["", "Returns:"] + ['%s' % s for s in proc['results']] + ['"""']
-    proc['indent'] = meta['indent']
-    return proc
+class Procedure(object):
+    @staticmethod
+    def name_from_value(value):
+        name = re.sub('[\'\"\[\]\.]+', '_', value)
+        name = re.sub('_+$', '', name)
+        return name
 
-def proc_add_line(proc, line, meta):
-    assert line.startswith(proc['indent'])
-    proc['body'].append(line[len(proc['indent']):])
+    @staticmethod
+    def parse_param(param):
+        """
+        Three cases are supported:
+        1. one value looking like parameter name
+        2. one value looking like parameter default value (like array or dict item, object property or simply a string)
+        3. two values: parameter name and default value
 
-def proc_end(proc, meta):
-    proc['body'].append('return %s' % ', '.join(proc['results']))
-    text = "\ndef %s(%s):\n" % (
-        proc['name'],
-        ', '.join(f'{k}={v}' if v else k for k, v in zip(proc['param_names'], proc['param_defaults']))
-    )
-    text += '\n'.join('    %s' % s for s in proc['body'])
-    return text
+        In case 2 we generate dummy variable name from its value (args.path -> args_path, args['path'] -> args__path__).
+
+        Later in we'll substitute all entries of variable default value in function's body by the name
+        of corresponding variable.
+        """
+        items = [s.strip() for s in param.split('=')]
+        if len(items) == 1:
+            default = items[0]
+            name = Procedure.name_from_value(default)
+            if name == default:
+                default = None
+        elif len(items) == 2:
+            name, default = items
+        else:
+            raise Exception(f"Cannot process parameter definition: {param}")
+        return name, default
+
+    def __repr__(self):
+        return self.__dict__.__repr__()
+
+    def __init__(self, m_name, meta):
+        self.name = m_name.group('name')
+
+        self.params = [self.parse_param(param) for param in m_name.group('params').split(',')]
+        self.param_names = [k for k, v in self.params]
+        self.param_defaults = [v for k, v in self.params]
+        self.param_substs = [(v, k) for k, v in self.params if v is not None]
+
+        self.results = [s.strip() for s in m_name.group('results').split(',')]
+
+        self.body =\
+            ['"""', 'Parameters:'] +\
+            [':param %s' % (f'{k}={v}' if v else k) for k, v in self.params] +\
+            ["", "Returns:"] + ['%s' % s for s in self.results] + ['"""']
+
+        self.indent = meta['indent']
+        logging.debug("Procedure metadata from header:\n%s" % self)
+
+    def add_line(self, line, meta):
+        assert line.startswith(self.indent)
+        # Trim indentation
+        line = line[len(self.indent):]
+        # Substitute parameter values by its names
+        line = reduce(lambda s, r: s.replace(*r), self.param_substs, line)
+        self.body.append(line)
+
+    def end(self, meta):
+        self.body.append('return %s' % ', '.join(self.results))
+        text = "\ndef %s(%s):\n" % (self.name, ', '.join(f'{k}={v}' if v else k for k, v in self.params))
+        text += '\n'.join('    %s' % s for s in self.body)
+        return text
+
+    def call(self, meta):
+        params = ', '.join(v if v is not None else k for k, v in self.params)
+        results = ', '.join(self.results)
+        return f"{self.indent}{results} = {self.name}({params})"
+
 
 @consumer
 def collect_proc(destination):
@@ -147,13 +193,13 @@ def collect_proc(destination):
             m_name = procname_re.match(line)
             if m_name:
                 stack.append(proc)
-                proc = proc_begin(m_name, meta)
+                proc = Procedure(m_name, meta)
             else:
                 logging.error('Wrong proc name: %s' % line)
         elif tag == 'CODE':
             if proc is not None:
                 # Add line to the procedure body.
-                proc_add_line(proc, line, meta)
+                proc.add_line(line, meta)
                 line_out = destination.send(('PROC_CODE', line, meta))
             else:
                 line_out = destination.send(('CODE', line, meta))
@@ -165,11 +211,11 @@ def collect_proc(destination):
             #
             # which is equivalent transformation if the outer proc uses only declared results
             # of the inner one.
-            text = proc_end(proc, meta)
-            call = proc['indent'] + "%s = %s(%s)" % (', '.join(proc['results']), proc['name'], ', '.join(proc['param_names']))
+            text = proc.end(meta)
+            call = proc.call(meta)
             proc = stack.pop()
             if proc is not None:
-                proc['body'].append(call)
+                proc.add_line(call, meta)
             logging.debug(f'Defining a function:{text}')
             line_out = destination.send((tag, text, meta))
         else:
@@ -260,11 +306,12 @@ class NotebookLoader(object):
         try:
             text = self.process_ipynb(nb)
             code = self.shell.input_transformer_manager.transform_cell(text)
-            numbered_code ='\n'.join(['%4i %s' % (n+1, l) for n, l in enumerate(code.split('\n'))]) 
+            numbered_code ='\n'.join(['%4i %s' % (n+1, l) for n, l in enumerate(code.split('\n'))])
             exec(code, mod.__dict__)
             mod.__code__ = code
-        except Exception as e:
-            logging.error("Exception during module code execution: %s" % e)
+        except Exception:
+            exc_type, exc, tb = sys.exc_info()
+            logging.error("Exception during module code execution: line %i, %s" % (tb.tb_lineno, exc))
             logging.error("Executing module code:\n" + numbered_code)
             raise e
         finally:
