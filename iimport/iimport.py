@@ -29,57 +29,8 @@ tags = {
     '*/': 'END_SKIP',
 }
 _procname_re = '(?P<name>[a-zA-Z0-9_]+)'\
-               ' *\((?P<params>[a-zA-Z0-9.\[\],_= \'\"]+)\)'\
-               ' *-> *(?P<results>[a-zA-Z0-9_, ]+)'
-
-def consumer(func):
-    def wrapper(*args, **kwargs):
-        g = func(*args, **kwargs)
-        next(g)
-        return g
-    wrapper.__name__ = func.__name__
-    wrapper.__dict__ = func.__dict__
-    wrapper.__doc__ = func.__doc__
-    return wrapper
-
-@consumer
-def fetch_tag(destination, opts={}):
-    tag_re = re.compile(_tag_re)
-
-    # Things to be pushed to coroutines chain
-    # Line following after tag
-    line_out = None
-    # Dict of metainformation collected
-    meta = {}
-
-    while True:
-        line = (yield line_out)
-        while line is None:
-            line = yield
-
-        tag = 'CODE'
-        m = tag_re.match(line)
-        if m:
-            # fetch tag from tagcode
-            tagcode = m.group('tagcode')
-            if tagcode in tags:
-                tag = tags[tagcode]
-                line = line[len(m.group(0)):]
-                logging.debug("Found tag: %s" % tag)
-            # save indent to substract it from procedure lines
-            indent = m.group('indent')
-            assert len(indent) % 4 == 0
-            meta['indent'] = indent
-
-        # If processing is disabled, ignore all tags
-        if opts.get('enabled', True):
-            line_out = destination.send((tag, line, meta))
-        else:
-            if tag in ['BEGIN_PROC']:
-                line_out = None
-            else:
-                line_out = line
-
+               ' *\((?P<params>[a-zA-Z0-9.\[\],_= \'\"]*)\)'\
+               '( *-> *(?P<results>[a-zA-Z0-9_, ]*))'
 
 class Procedure(object):
     @staticmethod
@@ -153,6 +104,54 @@ class Procedure(object):
         results = ', '.join(self.results)
         return f"{self.indent}{results} = {self.name}({params})"
 
+
+def consumer(func):
+    def wrapper(*args, **kwargs):
+        g = func(*args, **kwargs)
+        next(g)
+        return g
+    wrapper.__name__ = func.__name__
+    wrapper.__dict__ = func.__dict__
+    wrapper.__doc__ = func.__doc__
+    return wrapper
+
+@consumer
+def fetch_tag(destination, opts={}):
+    tag_re = re.compile(_tag_re)
+
+    # Things to be pushed to coroutines chain
+    # Line following after tag
+    line_out = None
+    # Dict of metainformation collected
+    meta = {}
+
+    while True:
+        line = (yield line_out)
+        while line is None:
+            line = yield
+
+        tag = 'CODE'
+        m = tag_re.match(line)
+        if m:
+            # fetch tag from tagcode
+            tagcode = m.group('tagcode')
+            if tagcode in tags:
+                tag = tags[tagcode]
+                line = line[len(m.group(0)):]
+                logging.debug("Found tag: %s" % tag)
+            # save indent to substract it from procedure lines
+            indent = m.group('indent')
+            assert len(indent) % 4 == 0
+            meta['indent'] = indent
+
+        # If processing is disabled, ignore all tags
+        if opts.get('enabled', True):
+            line_out = destination.send((tag, line, meta))
+        else:
+            if tag in ['BEGIN_PROC']:
+                line_out = None
+            else:
+                line_out = line
 
 @consumer
 def collect_proc(destination):
@@ -280,7 +279,6 @@ class NotebookLoader(object):
     def __init__(self, path=None):
         self.shell = InteractiveShell.instance()
         self.path = path
-        self.chain = fetch_tag(collect_proc(output_filter(is_module=True)))
 
         newline_cutter = re.compile('\n\n\n\n*')
         self.output_filters = [
@@ -322,17 +320,17 @@ class NotebookLoader(object):
         """
         Pass the notebook through procedure collection filter and return parsed text.
         """
+        self.chain = fetch_tag(collect_proc(output_filter(is_module=True)))
         lines_out = []
 
         for cell in nb.cells:
-            cell_lines = cell.source.split('\n')
-            if cell.cell_type == 'code':
-                cell_lines_out = [l for l in (self.chain.send(l) for l in cell_lines) if l is not None]
-                if len(cell_lines_out) > 0:
-                    lines_out += cell_lines_out
-                    lines_out.append('\n')
-            elif cell.cell_type == 'markdown':
-                lines_out += ['# ' + l.replace('\n', '') for l in cell_lines]
+            cell_lines = [l for l in cell.source.split('\n') if l is not None]
+            if cell.cell_type != 'code':
+                cell_lines = ['#### ' + l for l in cell_lines]
+            cell_lines_out = [l for l in (self.chain.send(l) for l in cell_lines) if l is not None]
+            if len(cell_lines_out) > 0:
+                lines_out += cell_lines_out
+                lines_out.append('\n')
         text = '\n'.join(lines_out)
 
         for f in self.output_filters:
