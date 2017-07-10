@@ -37,6 +37,11 @@ For technical details see:
 - Jupyter notebook docs:
   - [[http://jupyter-notebook.readthedocs.io/en/latest/examples/Notebook/Importing%20Notebooks.html][Importing Jupyter Notebooks as Modules]]
 
+* Installation
+
+#+BEGIN_SRC sh
+$ pip install https://github.com/krvkir/iimport
+#+END_SRC
 
 * Examples
 
