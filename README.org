@@ -393,8 +393,9 @@ Note that beginning and ending tokens may be placed in different notebook cells,
 ** List of commands
 
 - =%iimport= -- import ipynb file. Examples of correct commands:
-  - =%iimport notebook1=
-  - =%iimport notebook1 as nb1=
-  - =%iimport ../notebooks/2017 Some notebook as some_nb=
+  - =%iimport notebook1=;
+  - =%iimport notebook1 as nb1=;
+  - TODO =%iimport ../notebooks/2017 Some notebook as some_nb=;
+  - =import 2017_Some_notebook as some_nb= -- regular import statement works too.
   Note that file extension (=.ipynb=) should be omitted.
 - =%iimport_enabled 1= -- enable parsing of the code and defining functions inside current notebook. Useful for debugging, by default is switched off.
