@@ -19,18 +19,23 @@ from IPython.core.magic import register_line_magic
 
 _tag_re = '^(?P<indent> *)%(?P<tagcode>[a-zA-Z+\-\\/<>*]+) *'
 tags = {
-    '<': 'BEGIN_PROC',
-    '>': 'END_PROC',
+    '@': 'DECORATOR',
     'def': 'BEGIN_PROC',
-    'end': 'END_PROC',
+    'return': 'END_PROC',
+
     '-': 'SKIP_LINE',
     '//': 'SKIP_LINE',
+    '--': 'TOGGLE_SKIP',
+
     '/*': 'BEGIN_SKIP',
     '*/': 'END_SKIP',
+
+    '+': 'INSERT_LINE',
+    '++': 'TOGGLE_INSERT',
 }
 _procname_re = '(?P<name>[a-zA-Z0-9_]+)'\
                ' *\((?P<params>[a-zA-Z0-9.\[\],_= \'\"]*)\)'\
-               '( *-> *(?P<results>[a-zA-Z0-9_, ]*))'
+               ' *\:'
 
 class Procedure(object):
     @staticmethod
@@ -75,12 +80,7 @@ class Procedure(object):
         self.param_defaults = [v for k, v in self.params]
         self.param_substs = [(v, k) for k, v in self.params if v is not None]
 
-        self.results = [s.strip() for s in m_name.group('results').split(',')]
-
-        self.body =\
-            ['"""', 'Parameters:'] +\
-            [':param %s' % (f'{k}={v}' if v else k) for k, v in self.params] +\
-            ["", "Returns:"] + ['%s' % s for s in self.results] + ['"""']
+        self.body = []
 
         self.indent = meta['indent']
         logging.debug("Procedure metadata from header:\n%s" % self)
@@ -93,10 +93,19 @@ class Procedure(object):
         line = reduce(lambda s, r: s.replace(*r), self.param_substs, line)
         self.body.append(line)
 
-    def end(self, meta):
+    def end(self, results, meta):
+        self.results = [s.strip() for s in results.split(',')]
         self.body.append('return %s' % ', '.join(self.results))
+
+        comment_lines = (
+            ['"""']
+            + [':param %s' % (f'{k}={v}' if v else k) for k, v in self.params]
+            + ["Returns: %s" % ', '.join(self.results)]
+            + ['"""']
+            )
+
         text = "\ndef %s(%s):\n" % (self.name, ', '.join(f'{k}={v}' if v else k for k, v in self.params))
-        text += '\n'.join('    %s' % s for s in self.body)
+        text += '\n'.join('    %s' % s for s in comment_lines + self.body)
         return text
 
     def call(self, meta):
@@ -210,7 +219,7 @@ def collect_proc(destination):
             #
             # which is equivalent transformation if the outer proc uses only declared results
             # of the inner one.
-            text = proc.end(meta)
+            text = proc.end(line, meta)
             call = proc.call(meta)
             proc = stack.pop()
             if proc is not None:
@@ -218,7 +227,7 @@ def collect_proc(destination):
             logging.debug(f'Defining a function:{text}')
             line_out = destination.send((tag, text, meta))
         else:
-            logging.error("Wrong state: tag=%s, line=%s" % (tag, line, meta))
+            logging.error("Wrong state: tag=%s, line=%s" % (tag, line))
 
         tag, line, meta = (yield line_out)
 
@@ -301,16 +310,15 @@ class NotebookLoader(object):
         save_user_ns = self.shell.user_ns
         self.shell.user_ns = mod.__dict__
 
+        text = self.process_ipynb(nb)
         try:
-            text = self.process_ipynb(nb)
-            code = self.shell.input_transformer_manager.transform_cell(text)
-            numbered_code ='\n'.join(['%4i %s' % (n+1, l) for n, l in enumerate(code.split('\n'))])
-            exec(code, mod.__dict__)
-            mod.__code__ = code
+            mod.__source__ = source = self.shell.input_transformer_manager.transform_cell(text)
+            mod.__numbered_source__ = numbered_source ='\n'.join(['%4i %s' % (n+1, l) for n, l in enumerate(source.split('\n'))])
+            exec(source, mod.__dict__)
         except Exception:
             exc_type, exc, tb = sys.exc_info()
             logging.error("Exception during module code execution: line %i, %s" % (tb.tb_lineno, exc))
-            logging.error("Executing module code:\n" + numbered_code)
+            logging.error("Executing module source:\n%s" % numbered_source)
             raise e
         finally:
             self.shell.user_ns = save_user_ns

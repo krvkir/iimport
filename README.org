@@ -1,5 +1,7 @@
 #+TITLE: iimport
 
+A tool for making reusable code from linear ipython notebooks.
+
 * Problem
 
 1. When you write linear code in the notebook, it's easy to do experiments and interactively debug your code, but you can't reuse the code and long notebooks usually are hard to read and comprehend.
@@ -73,7 +75,7 @@ import pandas as pd
 f1_path = './scenario1/file1.csv'
 f2_path = './scenario1/file2.csv'
 
-%def calc_sums(f1_path, f2_path) -> sums
+%def calc_sums(f1_path, f2_path):
 df1 = pd.read_csv(f1_path, sep=';').set_index('id1')
 df2 = pd.read_csv(f2_path, sep=',').set_index('id2')
 df = df1.join(df2, on='id2', how='inner').dropna(how='any')
@@ -81,7 +83,7 @@ df = df1.join(df2, on='id2', how='inner').dropna(how='any')
 
 sums = df.groupby('a')['b'].sum()
 %- sums.plt.hist(bins=50)
-%end
+%return sums
 #+END_SRC
 
 Those modifications won't affect interactive execution of your code: you can still run your cells and won't notice any difference.
@@ -98,7 +100,7 @@ f2_path = './scenario2/file2.csv'
 sums = nb1.calc_sums(f1_path, f2_path)
 #+END_SRC
 
-If you want to see the acual code from =nb1= module, you can either enable debug logging (=import logging; logging.basicConfig(level=logging.DEBUG)=) and the code will be printed on =%iimport= execution, or you may set =nb1.__code__= variable, then you'll see this output:
+If you want to see the acual code from =nb1= module, you can either enable debug logging (=import logging; logging.basicConfig(level=logging.DEBUG)=) and the code will be printed on =%iimport= execution, or you may set =nb1.__source__= variable, then you'll see this output:
 
 #+BEGIN_SRC python -n
 import pandas as pd
@@ -195,17 +197,17 @@ After placing tokens the code should look like this:
   ref_path = './some_useful_reference.csv'
   dir_path = './some_dir/'
 
-  %def calc_sum(f1_path=f1_path, f2_path=f2_path) -> sum
-  %def load_df(f1_path=f1_path, f2_path=f2_path) -> df
+  %def calc_sum(f1_path=f1_path, f2_path=f2_path):
+  %def load_df(f1_path=f1_path, f2_path=f2_path):
   # Load data
   df1 = pd.read_csv(f1_path, sep=';').set_index('id1')
   df2 = pd.read_csv(f2_path, sep=',').set_index('id2')
   df = df1.join(df2, on='id2', how='inner').dropna(how='any')
   %- df.info()
-  %end
+  %return df
 
   sums = df.groupby('a')['b'].sum()
-  %end
+  %return sums
 
   %/*
   # Make complicated plot that should not appear in imported code
@@ -216,15 +218,15 @@ After placing tokens the code should look like this:
   plt.grid()
   %*/
 
-  %def load_objs(df, ref_path=ref_path, dir_path=dir_path) -> objs
+  %def load_objs(df, ref_path=ref_path, dir_path=dir_path):
 
-  %def load_ref(ref_path=ref_path) -> ref
+  %def load_ref(ref_path=ref_path):
   # Load important reference and prepare it for usage
   ref = pd.read_csv(ref_path, sep=';', encoding='cp1251').set_index('ref_id')
   # Drop rows using some condition
   ref['calculated_field'] = ref['field_a'] * ref['field_b'] + ref['field_c']
   ref = ref[ref.calculated_field > 10]
-  %end
+  %return ref
 
   # Load and process files from disk
   objs = {}
@@ -232,7 +234,7 @@ After placing tokens the code should look like this:
       fpath = dir_path + row['file_path']
       if os.path.exists(fpath):
 
-          %def load_obj(fpath, ref) -> obj
+          %def load_obj(fpath, ref):
           with open(fpath, 'r') as f:
               # Load an object from the file
               obj = json.load(f)
@@ -244,10 +246,10 @@ After placing tokens the code should look like this:
               # Load some data from reference table into an object
               if 'ref_id' in obj:
                   obj['ref'] = ref.loc[obj['ref_id']]
-          %end
+          %return obj
 
           objs[ix] = obj
-  %end
+  %return objs
 #+END_SRC
 
 This is what happened:
@@ -275,12 +277,9 @@ Now let's see what we get on import time:
 
   def load_df(f1_path=f1_path, f2_path=f2_path):
       """
-      Parameters:
       :param f1_path=f1_path
       :param f2_path=f2_path
-
-      Returns:
-      df
+      Returns: df
       """
       # Load data
       df1 = pd.read_csv(f1_path, sep=';').set_index('id1')
@@ -290,12 +289,9 @@ Now let's see what we get on import time:
 
   def calc_sum(f1_path=f1_path, f2_path=f2_path):
       """
-      Parameters:
       :param f1_path=f1_path
       :param f2_path=f2_path
-
-      Returns:
-      sum
+      Returns: sum
       """
       df = load_df(f1_path, f2_path)
 
@@ -305,11 +301,8 @@ Now let's see what we get on import time:
 
   def load_ref(ref_path=ref_path):
       """
-      Parameters:
       :param ref_path=ref_path
-
-      Returns:
-      ref
+      Returns: ref
       """
       # Load important reference and prepare it for usage
       ref = pd.read_csv(ref_path, sep=';', encoding='cp1251').set_index('ref_id')
@@ -321,12 +314,9 @@ Now let's see what we get on import time:
 
   def load_obj(fpath, ref):
       """
-      Parameters:
       :param fpath
       :param dir_path=dir_path
-
-      Returns:
-      obj
+      Returns: obj
       """
       with open(fpath, 'r') as f:
           # Load an object from the file
@@ -344,12 +334,9 @@ Now let's see what we get on import time:
 
   def load_objs(df, ref_path=ref_path, dir_path=dir_path):
       """
-      Parameters:
       :param df
       :param ref_path=ref_path
-
-      Returns:
-      objs
+      Returns: objs
       """
 
       ref = load_ref(ref_path)
@@ -381,8 +368,8 @@ Note that all the procedures (including nested ones) became top-level functions,
 
 ** List of tokens
 
-- Beginning of procedure: =%<= or =%def=
-- End of procedure: =%>= or =%end=
+- Beginning of procedure: =%def=
+- End of procedure: =%return=
 
 Note that beginning and ending tokens may be placed in different notebook cells, so that you can split a procedure into several cells.
 
