@@ -7,6 +7,9 @@ import importlib
 import re
 import logging
 
+import numpy as np
+from hashlib import md5
+
 import nbformat
 from IPython import get_ipython
 from IPython.core.inputtransformer import InputTransformer, CoroutineInputTransformer
@@ -17,8 +20,13 @@ from IPython.core.magic import register_line_magic
 # Procedure collector
 #
 
-_tag_re = '^(?P<indent> *)%(?P<tagcode>[a-zA-Z+\-\\/<>*]+) *'
+_tag_re = '^(?P<indent> *)%'\
+          '(\{(?P<tagoptions>[a-zA-Z0-9.,\'\"]*)\})?'\
+          '(?P<tagcode>[a-zA-Z+\-\\/<>*_]+) *'
 tags = {
+    'example': 'BEGIN_EXAMPLE',
+    'end_example': 'END_EXAMPLE',
+
     '@': 'DECORATOR',
     'def': 'BEGIN_PROC',
     'return': 'END_PROC',
@@ -36,6 +44,7 @@ tags = {
 _procname_re = '(?P<name>[a-zA-Z0-9_]+)'\
                ' *\((?P<params>[a-zA-Z0-9.\[\],_= \'\"]*)\)'\
                ' *\:'
+_examplename_re = '(?P<name>[a-zA-Z0-9_]+)'
 
 class Procedure(object):
     @staticmethod
@@ -72,10 +81,10 @@ class Procedure(object):
     def __repr__(self):
         return self.__dict__.__repr__()
 
-    def __init__(self, m_name, meta):
-        self.name = m_name.group('name')
+    def __init__(self, name, params_str, meta):
+        self.name = name
 
-        self.params = [self.parse_param(param) for param in m_name.group('params').split(',')]
+        self.params = [self.parse_param(param) for param in params_str.split(',')]
         self.param_names = [k for k, v in self.params]
         self.param_defaults = [v for k, v in self.params]
         self.param_substs = [(v, k) for k, v in self.params if v is not None]
@@ -112,6 +121,41 @@ class Procedure(object):
         params = ', '.join(v if v is not None else k for k, v in self.params)
         results = ', '.join(self.results)
         return f"{self.indent}{results} = {self.name}({params})"
+
+
+class Example(Procedure):
+    """
+    Example is a special case of the procedure:
+    - it has no parameters and returns no values
+    - its call is not inserted into the wrapping function when it ends
+    - it can be nameless. If so, it does not produce a function
+
+    Primary use case of examples: capture testing/debugging code inside something
+    which should not be runned on import.
+
+    Procedures declared inside examples are handled as any other procedures: they become
+    functions on import.
+
+    You can initialize variables, print dataframes, make plots and interactive widgets
+    in the Example and do not bother it will run (and fail) when you import a procedure
+    declared inside example.
+    """
+
+    def __init__(self, name, meta):
+        return super(Example, self).__init__(name, '', meta)
+
+    def end(self, *args, **kwargs):
+        if self.name is None:
+            # If the example is nameless, then do not export example as function
+            return ''
+        return super(Example, self).end(*args, **kwargs)
+
+    def call(self, *args, **kwargs):
+        if self.name is None:
+            # If the example is nameless, then do not allow to call it
+            return ''
+        return super(Example, self).call(*args, **kwargs)
+
 
 
 def consumer(func):
@@ -170,6 +214,7 @@ def collect_proc(destination):
     proc = None
 
     procname_re = re.compile(_procname_re)
+    examplename_re = re.compile(_examplename_re)
 
     # Processing all the input line by line
     tag, line, meta = yield
@@ -192,18 +237,22 @@ def collect_proc(destination):
             # (Useful for in-notebook plotting or debug output which is of no need
             # in the non-interactive code.)
             line_out = destination.send((tag, line, meta))
+
         elif tag == 'BEGIN_PROC':
             # Check procedure name for correctness and parse it into name, params and results
             #
             # If procedure declaration started while another procedure already being collected,
             # then push the old one on top of the stack and process the new one. (It will be declared
             # in global namespace to be importable.)
-            m_name = procname_re.match(line)
-            if m_name:
+            try:
+                m_name = procname_re.match(line)
+                new_proc = Procedure(m_name.group('name'), m_name.group('params'), meta)
                 stack.append(proc)
-                proc = Procedure(m_name, meta)
-            else:
-                logging.error('Wrong proc name: %s' % line)
+                proc = new_proc
+            except Exception as exc:
+                exc_type, exc, tb = sys.exc_info()
+                logging.error('Procedure header parsing error: %s, %s' % (exc_type, exc))
+
         elif tag == 'CODE':
             if proc is not None:
                 # Add line to the procedure body.
@@ -211,7 +260,8 @@ def collect_proc(destination):
                 line_out = destination.send(('PROC_CODE', line, meta))
             else:
                 line_out = destination.send(('CODE', line, meta))
-        elif tag == 'END_PROC' and proc is not None:
+
+        elif tag == 'END_PROC' and proc is not None and type(proc) != Example:
             # Stop collecting the procedure and declare it.
             # It this one is inside another, then add to the outer one the line like this:
             #
@@ -220,12 +270,40 @@ def collect_proc(destination):
             # which is equivalent transformation if the outer proc uses only declared results
             # of the inner one.
             text = proc.end(line, meta)
+            logging.debug(f'Defining a function:{text}')
+            line_out = destination.send((tag, text, meta))
+            # Restoring previous procedure
             call = proc.call(meta)
             proc = stack.pop()
             if proc is not None:
                 proc.add_line(call, meta)
+
+        elif tag == 'BEGIN_EXAMPLE':
+            # Example is a special case of the procedure. It encapsulates all the test code
+            # but all the procedures defined during the example become available outside it.
+            try:
+                name = None
+                match = examplename_re.match(line)
+                if match and match.group('name') is not None:
+                    name = '_example_' + match.group('name')
+
+                new_proc = Example(name, meta)
+
+                stack.append(proc)
+                proc = new_proc
+            except Exception as exc:
+                exc_type, exc, tb = sys.exc_info()
+                logging.error('Example header parsing error: %s, %s' % (exc_type, exc))
+
+        elif tag == 'END_EXAMPLE' and proc is not None and type(proc) == Example:
+            # When example ends, the function with its code is not defined, and it is
+            # not called in the code.
+            text = proc.end(line, meta)
             logging.debug(f'Defining a function:{text}')
             line_out = destination.send((tag, text, meta))
+            # Restoring previous procedure
+            proc = stack.pop()
+
         else:
             logging.error("Wrong state: tag=%s, line=%s" % (tag, line))
 
@@ -244,7 +322,7 @@ def output_filter(is_module=False):
     line_out = None
     while True:
         tag, line, meta = (yield line_out)
-        line_out = line if not is_module or (tag in ['CODE', 'END_PROC']) else None
+        line_out = line if not is_module or (tag in ['CODE', 'END_PROC', 'END_EXAMPLE']) else None
 
 #
 # .ipynb import mechanism
