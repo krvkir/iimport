@@ -494,3 +494,11 @@ def load_ipython_extension(ip):
 
 def unload_ipython_extension(ip):
     print("Unloading this extension is currently not implemented, please restart the kernel.")
+
+
+def save_ipynb_to_py(model, os_path, contents_manager, **kwargs):
+    if model['type'] != 'notebook':
+        return
+    NotebookLoader.convert_ipynb(os_path)
+    contents_manager.log.info("File {os_path} exported to py".format(os_path=os_path))
+
