@@ -17,7 +17,7 @@ config = {
     'url': '',
     'download_url': '',
 
-    'version': '0.1dev1',
+    'version': '0.1.dev1',
     'install_requires': [
         'IPython',
         ],

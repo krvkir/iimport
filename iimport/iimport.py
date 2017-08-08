@@ -47,6 +47,7 @@ _procname_re = '(?P<name>[a-zA-Z0-9_]+)'\
 _examplename_re = '(?P<name>[a-zA-Z0-9_]+)'
 
 class Procedure(object):
+
     @staticmethod
     def name_from_value(value):
         name = re.sub('[\'\"\[\]\.]+', '_', value)
@@ -75,7 +76,7 @@ class Procedure(object):
         elif len(items) == 2:
             name, default = items
         else:
-            raise Exception(f"Cannot process parameter definition: {param}")
+            raise Exception("Cannot process parameter definition: {param}".format(param=param))
         return name, default
 
     def __repr__(self):
@@ -108,19 +109,19 @@ class Procedure(object):
 
         comment_lines = (
             ['"""']
-            + [':param %s' % (f'{k}={v}' if v else k) for k, v in self.params]
+            + [':param %s' % ('{k}={v}'.format(k=k, v=v) if v else k) for k, v in self.params]
             + ["Returns: %s" % ', '.join(self.results)]
             + ['"""']
             )
 
-        text = "\ndef %s(%s):\n" % (self.name, ', '.join(f'{k}={v}' if v else k for k, v in self.params))
+        text = "\ndef %s(%s):\n" % (self.name, ', '.join('{k}={v}'.format(k=k, v=v) if v else k for k, v in self.params))
         text += '\n'.join('    %s' % s for s in comment_lines + self.body)
         return text
 
     def call(self, meta):
         params = ', '.join(v if v is not None else k for k, v in self.params)
         results = ', '.join(self.results)
-        return f"{self.indent}{results} = {self.name}({params})"
+        return "{self.indent}{results} = {self.name}({params})".format(self=self, results=results, params=params)
 
 
 class Example(Procedure):
@@ -270,7 +271,7 @@ def collect_proc(destination):
             # which is equivalent transformation if the outer proc uses only declared results
             # of the inner one.
             text = proc.end(line, meta)
-            logging.debug(f'Defining a function:{text}')
+            logging.debug('Defining a function:{text}'.format(text=text))
             line_out = destination.send((tag, text, meta))
             # Restoring previous procedure
             call = proc.call(meta)
@@ -299,7 +300,7 @@ def collect_proc(destination):
             # When example ends, the function with its code is not defined, and it is
             # not called in the code.
             text = proc.end(line, meta)
-            logging.debug(f'Defining a function:{text}')
+            logging.debug('Defining a function:{text}'.format(text=text))
             line_out = destination.send((tag, text, meta))
             # Restoring previous procedure
             proc = stack.pop()
@@ -362,15 +363,50 @@ class NotebookFinder(object):
             self.loaders[key] = NotebookLoader(path)
         return self.loaders[key]
 
+
 class NotebookLoader(object):
+
     def __init__(self, path=None):
         self.shell = InteractiveShell.instance()
         self.path = path
 
-        newline_cutter = re.compile('\n\n\n\n*')
-        self.output_filters = [
-            lambda s: newline_cutter.sub('\n\n\n', s),
-            ]
+    @staticmethod
+    def process_ipynb(nb):
+        """
+        Pass the notebook through procedure collection filter and return parsed text.
+        """
+        chain = fetch_tag(collect_proc(output_filter(is_module=True)))
+        lines_out = []
+
+        for cell in nb.cells:
+            cell_lines = [l for l in cell.source.split('\n') if l is not None]
+            if cell.cell_type != 'code':
+                cell_lines = ['#### ' + l for l in cell_lines]
+            cell_lines_out = [l for l in (chain.send(l) for l in cell_lines) if l is not None]
+            if len(cell_lines_out) > 0:
+                lines_out += cell_lines_out
+                lines_out.append('\n')
+
+        # Cut all ipython magic
+        magic_matcher = re.compile('^%.*')
+        lines_out = [l for l in lines_out if magic_matcher.match(l) is None]
+
+        text = '\n'.join(lines_out)
+
+        # Cut newlines repeating more than 3 times
+        text = re.compile('\n\n\n\n*').sub('\n\n\n', text)
+
+        return text
+
+    @staticmethod
+    def convert_ipynb(path):
+        with open(path, 'r', encoding='utf-8') as f:
+            nb = nbformat.read(f, 4)
+        text = NotebookLoader.process_ipynb(nb)
+
+        path_py = path.rsplit('.', 1)[0] + '.py'
+        with open(path_py, 'w', encoding='utf-8') as f:
+            f.writelines(text)
 
     def load_module(self, fullname):
         path = find_notebook(fullname, self.path)
@@ -402,36 +438,15 @@ class NotebookLoader(object):
             self.shell.user_ns = save_user_ns
             return mod
 
-    def process_ipynb(self, nb):
-        """
-        Pass the notebook through procedure collection filter and return parsed text.
-        """
-        self.chain = fetch_tag(collect_proc(output_filter(is_module=True)))
-        lines_out = []
 
-        for cell in nb.cells:
-            cell_lines = [l for l in cell.source.split('\n') if l is not None]
-            if cell.cell_type != 'code':
-                cell_lines = ['#### ' + l for l in cell_lines]
-            cell_lines_out = [l for l in (self.chain.send(l) for l in cell_lines) if l is not None]
-            if len(cell_lines_out) > 0:
-                lines_out += cell_lines_out
-                lines_out.append('\n')
-        text = '\n'.join(lines_out)
-
-        for f in self.output_filters:
-            text = f(text)
-        return text
-
-
+# Registering ipynb import mechanism
+sys.meta_path.append(NotebookFinder())
 
 #
 # Extension activation function
 #
 
 def load_ipython_extension(ip):
-    # Registering ipynb import mechanism
-    sys.meta_path.append(NotebookFinder())
 
     # Activating procedure collector
     chain_opts = {'enabled': 0}
@@ -459,7 +474,7 @@ def load_ipython_extension(ip):
             chain_opts['enabled'] = 1
             print("iimport macros enabled")
         else:
-            logging.error(f"Wrong argument supplied: {enabled}")
+            logging.error("Wrong argument supplied: {enabled}".format(enabled=enabled))
 
     shell = InteractiveShell.instance()
     def iimport(line):
