@@ -6,6 +6,7 @@ from functools import reduce
 import importlib
 import re
 import logging
+logger = logging.getLogger(__name__)
 
 import numpy as np
 from hashlib import md5
@@ -20,9 +21,11 @@ from IPython.core.magic import register_line_magic
 # Procedure collector
 #
 
-_tag_re = '^(?P<indent> *)%'\
-          '(\{(?P<tagoptions>[a-zA-Z0-9.,\'\"]*)\})?'\
-          '(?P<tagcode>[a-zA-Z+\-\\/<>*_]+) *'
+_tag_re = (
+    '^(?P<indent> *)%'
+    '(\{(?P<tagoptions>[a-zA-Z0-9.,\'\"]*)\})?'
+    '(?P<tagcode>[a-zA-Z+\-\\/<>*_]+) *'
+)
 tags = {
     'example': 'BEGIN_EXAMPLE',
     'end_example': 'END_EXAMPLE',
@@ -41,9 +44,11 @@ tags = {
     '+': 'INSERT_LINE',
     '++': 'TOGGLE_INSERT',
 }
-_procname_re = '(?P<name>[a-zA-Z0-9_]+)'\
-               ' *\((?P<params>[a-zA-Z0-9.\[\],_= \'\"]*)\)'\
-               ' *\:'
+_procname_re = (
+    '(?P<name>[a-zA-Z0-9_]+)'
+    ' *\((?P<params>[a-zA-Z0-9.\[\],_= \'\"]*)\)'
+    ' *\:'
+)
 _examplename_re = '(?P<name>[a-zA-Z0-9_]+)'
 
 class Procedure(object):
@@ -59,13 +64,15 @@ class Procedure(object):
         """
         Three cases are supported:
         1. one value looking like parameter name
-        2. one value looking like parameter default value (like array or dict item, object property or simply a string)
+        2. one value looking like parameter default value
+           (like array or dict item, object property or simply a string)
         3. two values: parameter name and default value
 
-        In case 2 we generate dummy variable name from its value (args.path -> args_path, args['path'] -> args__path__).
+        In case 2 we generate dummy variable name from its value
+        (args.path -> args_path, args['path'] -> args__path__).
 
-        Later in we'll substitute all entries of variable default value in function's body by the name
-        of corresponding variable.
+        Later in we'll substitute all entries of variable default value
+        in function's body by the name of corresponding variable.
         """
         items = [s.strip() for s in param.split('=')]
         if len(items) == 1:
@@ -76,13 +83,14 @@ class Procedure(object):
         elif len(items) == 2:
             name, default = items
         else:
-            raise Exception("Cannot process parameter definition: {param}".format(param=param))
+            raise Exception("Cannot process parameter definition: {param}"
+                            .format(param=param))
         return name, default
 
     def __repr__(self):
         return self.__dict__.__repr__()
 
-    def __init__(self, name, params_str, meta):
+    def __init__(self, name, params_str, meta, ns={}):
         self.name = name
 
         self.params = [self.parse_param(param) for param in params_str.split(',')]
@@ -91,9 +99,10 @@ class Procedure(object):
         self.param_substs = [(v, k) for k, v in self.params if v is not None]
 
         self.body = []
+        self.ns = ns
 
-        self.indent = meta['indent']
-        logging.debug("Procedure metadata from header:\n%s" % self)
+        self.indent = meta.get('indent', 0)
+        logger.debug("Procedure metadata from header:\n%s" % self)
 
     def add_line(self, line, meta):
         assert line.startswith(self.indent)
@@ -109,19 +118,23 @@ class Procedure(object):
 
         comment_lines = (
             ['"""']
-            + [':param %s' % ('{k}={v}'.format(k=k, v=v) if v else k) for k, v in self.params]
+            + [':param %s' % ('{k}={v}'.format(k=k, v=v) if v else k)
+               for k, v in self.params]
             + ["Returns: %s" % ', '.join(self.results)]
             + ['"""']
             )
 
-        text = "\ndef %s(%s):\n" % (self.name, ', '.join('{k}={v}'.format(k=k, v=v) if v else k for k, v in self.params))
+        params = ', '.join('{k}={v}'.format(k=k, v=v) if v else k
+                           for k, v in self.params)
+        text = "\ndef %s(%s):\n" % (self.name, params)
         text += '\n'.join('    %s' % s for s in comment_lines + self.body)
         return text
 
     def call(self, meta):
         params = ', '.join(v if v is not None else k for k, v in self.params)
         results = ', '.join(self.results)
-        return "{self.indent}{results} = {self.name}({params})".format(self=self, results=results, params=params)
+        return ("{self.indent}{results} = {self.name}({params})"
+                .format(self=self, results=results, params=params))
 
 
 class Example(Procedure):
@@ -134,15 +147,15 @@ class Example(Procedure):
     Primary use case of examples: capture testing/debugging code inside something
     which should not be runned on import.
 
-    Procedures declared inside examples are handled as any other procedures: they become
-    functions on import.
+    Procedures declared inside examples are handled as any other procedures:
+    they become functions on import.
 
-    You can initialize variables, print dataframes, make plots and interactive widgets
-    in the Example and do not bother it will run (and fail) when you import a procedure
-    declared inside example.
+    You can initialize variables, print dataframes, make plots and interactive
+    widgets in the Example and do not bother it will run (and fail) when
+    you import a procedure declared inside example.
     """
 
-    def __init__(self, name, meta):
+    def __init__(self, name=None, meta={}):
         return super(Example, self).__init__(name, '', meta)
 
     def end(self, *args, **kwargs):
@@ -192,7 +205,7 @@ def fetch_tag(destination, opts={}):
             if tagcode in tags:
                 tag = tags[tagcode]
                 line = line[len(m.group(0)):]
-                logging.debug("Found tag: %s" % tag)
+                logger.debug("Found tag: %s" % tag)
             # save indent to substract it from procedure lines
             indent = m.group('indent')
             assert len(indent) % 4 == 0
@@ -208,8 +221,9 @@ def fetch_tag(destination, opts={}):
                 line_out = line
 
 @consumer
-def collect_proc(destination):
-    # Stack of procedures in declaration (to support procedures declaration nesting)
+def collect_proc(destination, ipython=None):
+    # Stack of procedures in declaration
+    # (to support procedures declaration nesting)
     stack = []
     # Procedure data
     proc = None
@@ -223,8 +237,8 @@ def collect_proc(destination):
         line_out = None
 
         if tag == 'BEGIN_SKIP':
-            # Skip all from this line to the line where END_SKIP tag will be found
-            # (or to the end of the file).
+            # Skip all from this line to the line where END_SKIP tag
+            # will be found (or to the end of the file).
             while tag != 'END_SKIP':
                 if tag in ['BEGIN_PROC']:
                     tag, line, meta = yield
@@ -235,24 +249,29 @@ def collect_proc(destination):
 
         if tag == 'SKIP_LINE':
             # Execute line in the notebook but do not add it to the procedure.
-            # (Useful for in-notebook plotting or debug output which is of no need
-            # in the non-interactive code.)
+            # (Useful for in-notebook plotting or debug output
+            # which is of no need in the non-interactive code.)
             line_out = destination.send((tag, line, meta))
 
         elif tag == 'BEGIN_PROC':
-            # Check procedure name for correctness and parse it into name, params and results
+            # Check procedure name for correctness and parse it into name,
+            # params and results
             #
-            # If procedure declaration started while another procedure already being collected,
-            # then push the old one on top of the stack and process the new one. (It will be declared
-            # in global namespace to be importable.)
+            # If procedure declaration started while another procedure already
+            # being collected, then push the old one on top of the stack
+            # and process the new one. (It will be declared in global namespace
+            # to be importable.)
             try:
                 m_name = procname_re.match(line)
-                new_proc = Procedure(m_name.group('name'), m_name.group('params'), meta)
+                # Create procedure object
+                new_proc = Procedure(
+                    m_name.group('name'), m_name.group('params'), meta)
                 stack.append(proc)
                 proc = new_proc
             except Exception as exc:
                 exc_type, exc, tb = sys.exc_info()
-                logging.error('Procedure header parsing error: %s, %s' % (exc_type, exc))
+                logger.error('Procedure header parsing error: %s, %s'
+                             % (exc_type, exc))
 
         elif tag == 'CODE':
             if proc is not None:
@@ -264,24 +283,28 @@ def collect_proc(destination):
 
         elif tag == 'END_PROC' and proc is not None and type(proc) != Example:
             # Stop collecting the procedure and declare it.
-            # It this one is inside another, then add to the outer one the line like this:
+            # It this one is inside another, then add to the outer one
+            # the line like this:
             #
             # `result1, ... , result_n = inner_proc(param1, ... , param_m)`
             #
-            # which is equivalent transformation if the outer proc uses only declared results
-            # of the inner one.
+            # which is equivalent transformation if the outer proc uses
+            # only declared results of the inner one.
             text = proc.end(line, meta)
-            logging.debug('Defining a function:{text}'.format(text=text))
-            line_out = destination.send((tag, text, meta))
-            # Restoring previous procedure
+            logger.debug('Defining a function:{text}'.format(text=text))
+            # Restore previous procedure
             call = proc.call(meta)
             proc = stack.pop()
+            # Declare procedure
+            line_out = destination.send((tag, text, meta))
+            # Add procedure call to the wrapping procedure
             if proc is not None:
                 proc.add_line(call, meta)
 
         elif tag == 'BEGIN_EXAMPLE':
-            # Example is a special case of the procedure. It encapsulates all the test code
-            # but all the procedures defined during the example become available outside it.
+            # Example is a special case of the procedure. It encapsulates
+            # all the test code but all the procedures defined during
+            # the example become available outside it.
             try:
                 name = None
                 match = examplename_re.match(line)
@@ -294,19 +317,20 @@ def collect_proc(destination):
                 proc = new_proc
             except Exception as exc:
                 exc_type, exc, tb = sys.exc_info()
-                logging.error('Example header parsing error: %s, %s' % (exc_type, exc))
+                logger.error('Example header parsing error: %s, %s'
+                             % (exc_type, exc))
 
         elif tag == 'END_EXAMPLE' and proc is not None and type(proc) == Example:
-            # When example ends, the function with its code is not defined, and it is
-            # not called in the code.
+            # When example ends, the function with its code is not defined,
+            # and it is not called in the code.
             text = proc.end(line, meta)
-            logging.debug('Defining a function:{text}'.format(text=text))
+            logger.debug('Defining a function:{text}'.format(text=text))
             line_out = destination.send((tag, text, meta))
             # Restoring previous procedure
             proc = stack.pop()
 
         else:
-            logging.error("Wrong state: tag=%s, line=%s" % (tag, line))
+            logger.error("Wrong state: tag=%s, line=%s" % (tag, line))
 
         tag, line, meta = (yield line_out)
 
@@ -323,7 +347,11 @@ def output_filter(is_module=False):
     line_out = None
     while True:
         tag, line, meta = (yield line_out)
-        line_out = line if not is_module or (tag in ['CODE', 'END_PROC', 'END_EXAMPLE']) else None
+
+        if not is_module or (tag in ['CODE', 'END_PROC', 'END_EXAMPLE']):
+            line_out = line
+        else:
+            line_out = None
 
 #
 # .ipynb import mechanism
@@ -382,7 +410,8 @@ class NotebookLoader(object):
             cell_lines = [l for l in cell.source.split('\n') if l is not None]
             if cell.cell_type != 'code':
                 cell_lines = ['#### ' + l for l in cell_lines]
-            cell_lines_out = [l for l in (chain.send(l) for l in cell_lines) if l is not None]
+            cell_lines_out = [l for l in (chain.send(l) for l in cell_lines)
+                              if l is not None]
             if len(cell_lines_out) > 0:
                 lines_out += cell_lines_out
                 lines_out.append('\n')
@@ -411,7 +440,7 @@ class NotebookLoader(object):
     def load_module(self, fullname):
         path = find_notebook(fullname, self.path)
 
-        logging.info("Importing notebook %s" % path)
+        logger.info("Importing notebook %s" % path)
         with open(path, 'r', encoding='utf-8') as f:
             nb = nbformat.read(f, 4)
 
@@ -426,13 +455,18 @@ class NotebookLoader(object):
 
         text = self.process_ipynb(nb)
         try:
-            mod.__source__ = source = self.shell.input_transformer_manager.transform_cell(text)
-            mod.__numbered_source__ = numbered_source ='\n'.join(['%4i %s' % (n+1, l) for n, l in enumerate(source.split('\n'))])
+            mod._source = source = \
+                self.shell.input_transformer_manager.transform_cell(text)
+            mod._numbered_source = numbered_source = \
+                '\n'.join(['%4i %s' % (n+1, l)
+                           for n, l in enumerate(source.split('\n'))])
             exec(source, mod.__dict__)
         except Exception:
             exc_type, exc, tb = sys.exc_info()
-            logging.error("Exception during module code execution: line %i, %s" % (tb.tb_lineno, exc))
-            logging.error("Executing module source:\n%s" % numbered_source)
+            logger.error("Exception during module code execution: line %i, %s"
+                         % (tb.tb_lineno, exc))
+            logger.error("Executing module source:\n%s"
+                         % numbered_source)
             raise e
         finally:
             self.shell.user_ns = save_user_ns
@@ -452,7 +486,9 @@ def load_ipython_extension(ip):
     chain_opts = {'enabled': 0}
     @CoroutineInputTransformer.wrap
     def chain():
-        chain = fetch_tag(collect_proc(output_filter()), opts=chain_opts)
+        chain = fetch_tag(
+            collect_proc(output_filter(), ipython=ip),
+            opts=chain_opts)
         line = yield
         while True:
             line = yield chain.send(line)
@@ -474,7 +510,8 @@ def load_ipython_extension(ip):
             chain_opts['enabled'] = 1
             print("iimport macros enabled")
         else:
-            logging.error("Wrong argument supplied: {enabled}".format(enabled=enabled))
+            logger.error("Wrong argument supplied: {enabled}"
+                         .format(enabled=enabled))
 
     shell = InteractiveShell.instance()
     def iimport(line):
@@ -493,12 +530,14 @@ def load_ipython_extension(ip):
     print('iimport loaded.')
 
 def unload_ipython_extension(ip):
-    print("Unloading this extension is currently not implemented, please restart the kernel.")
+    print("Unloading this extension is currently not implemented,"
+          " please restart the kernel.")
 
 
 def save_ipynb_to_py(model, os_path, contents_manager, **kwargs):
     if model['type'] != 'notebook':
         return
     NotebookLoader.convert_ipynb(os_path)
-    contents_manager.log.info("File {os_path} exported to py".format(os_path=os_path))
+    contents_manager.log.info("File {os_path} exported to py"
+                              .format(os_path=os_path))
 

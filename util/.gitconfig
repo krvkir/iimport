@@ -1,0 +1,6 @@
+[core]
+        attributesfile = /home/krvkir/.gitattributes
+        autocrlf = input
+        whitespace = trailing-space,space-before-tab
+[filter "dropoutput_ipynb"]
+        clean = /home/krvkir/bin/ipynb_output_filter.py
