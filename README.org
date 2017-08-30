@@ -41,8 +41,19 @@ For technical details see:
 
 * Installation
 
+The simplest installation:
 #+BEGIN_SRC sh
 $ pip install https://github.com/krvkir/iimport
+#+END_SRC
+
+Installation in edit mode:
+#+BEGIN_SRC sh
+$ # To install:
+$ git clone https://github.com/krvkir/iimport
+$ cd iimport
+$ pip install -e .
+$ # To update:
+$ git pull origin master
 #+END_SRC
 
 * Examples
