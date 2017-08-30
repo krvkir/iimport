@@ -159,7 +159,7 @@ def collect_proc(destination, ipython=None):
         elif tag == 'CODE':
             if proc is not None:
                 # Add line to the procedure body.
-                proc.add_line(line, meta)
+                proc.add_line(line)
                 line_out = destination.send(('PROC_CODE', line, meta))
             else:
                 line_out = destination.send(('CODE', line, meta))
@@ -173,16 +173,16 @@ def collect_proc(destination, ipython=None):
             #
             # which is equivalent transformation if the outer proc uses
             # only declared results of the inner one.
-            text = proc.end(line, meta)
+            text = proc.end(line)
             logger.debug('Defining a function:{text}'.format(text=text))
             # Restore previous procedure
-            call = proc.call(meta)
+            call = proc.call()
             proc = stack.pop()
             # Declare procedure
             line_out = destination.send((tag, text, meta))
             # Add procedure call to the wrapping procedure
             if proc is not None:
-                proc.add_line(call, meta)
+                proc.add_line(call)
 
         elif tag == 'BEGIN_EXAMPLE':
             # Example is a special case of the procedure. It encapsulates
@@ -206,7 +206,7 @@ def collect_proc(destination, ipython=None):
         elif tag == 'END_EXAMPLE' and proc is not None and type(proc) == Example:
             # When example ends, the function with its code is not defined,
             # and it is not called in the code.
-            text = proc.end(line, meta)
+            text = proc.end(line)
             logger.debug('Defining a function:{text}'.format(text=text))
             line_out = destination.send((tag, text, meta))
             # Restoring previous procedure

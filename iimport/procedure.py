@@ -57,7 +57,7 @@ class Procedure(object):
         self.indent = meta.get('indent', 0)
         logger.debug("Procedure metadata from header:\n%s" % self)
 
-    def add_line(self, line, meta):
+    def add_line(self, line):
         assert line.startswith(self.indent)
         # Trim indentation
         line = line[len(self.indent):]
@@ -65,7 +65,7 @@ class Procedure(object):
         line = reduce(lambda s, r: s.replace(*r), self.param_substs, line)
         self.body.append(line)
 
-    def end(self, results, meta):
+    def end(self, results):
         self.results = [s.strip() for s in results.split(',')]
         self.body.append('return %s' % ', '.join(self.results))
 
@@ -83,7 +83,7 @@ class Procedure(object):
         text += '\n'.join('    %s' % s for s in comment_lines + self.body)
         return text
 
-    def call(self, meta):
+    def call(self):
         params = ', '.join(v if v is not None else k for k, v in self.params)
         results = ', '.join(self.results)
         return ("{self.indent}{results} = {self.name}({params})"
