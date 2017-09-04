@@ -28,7 +28,10 @@ except ImportError:
         from IPython.nbformat.current import reads, write
         version = 'json'
 
-to_parse = sys.stdin.read()
+if len(sys.argv) > 1:
+    to_parse = open(sys.argv[1], 'r').read()
+else:
+    to_parse = sys.stdin.read()
 
 if not version:
     import json
