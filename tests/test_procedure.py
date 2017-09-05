@@ -28,7 +28,7 @@ def test_declare_procedure():
     text = proc.call()
 
 def test_declare_procedure_partly():
-    pass
+    assert False
 
 def test_parameters_substitution_in_proc_body():
-    pass
+    assert False

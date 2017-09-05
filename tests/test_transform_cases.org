@@ -1,0 +1,89 @@
+* What is it
+
+These are input and output code samples used for testing the tarnsformer.
+
+* simple                                                               :test:
+** in
+
+#+begin_src python
+a = 1
+b = 2
+
+%def func(a, b):
+c = a + b
+%return c
+#+end_src
+
+** out_module
+
+#+begin_src python
+a = 1
+b = 2
+c = a + b
+
+def func(a, b):
+c = a + b
+return c
+
+c = func(a, b)
+
+#+end_src
+
+** out_console
+
+* nested                                                               :test:
+** in
+
+#+begin_src python
+a = 1
+b = 2
+
+%def outer_func(a, b):
+c = a + b
+
+%def inner_func(c):
+d = c ** 2
+%return d
+
+%return d
+#+end_src
+
+** out_module
+
+#+begin_src python
+a = 1
+b = 2
+c = a + b
+d = c ** 2
+
+def inner_func(c):
+d = c ** 2
+return d
+
+def outer_func(a, b):
+c = a + b
+d = inner_func(c)
+return d
+
+d = outer_func(a, b)
+
+#+end_src
+
+* autodefine_args                                                      :test:
+** in
+
+#+begin_src python
+%def func(a=1, b=2):
+c = a + b
+%return c
+
+#+end_src
+
+** out_module
+
+#+begin_src python
+a = 1
+b = 2
+def func(a=1, b=2)
+
+#+end_src
