@@ -20,6 +20,7 @@ config = {
     'version': '0.1.dev1',
     'install_requires': [
         'IPython',
+        'nbformat',
         ],
     'packages': find_packages(exclude=['docs', 'contrib', 'tests']),
     'scripts': [],
