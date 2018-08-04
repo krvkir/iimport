@@ -42,7 +42,7 @@ For technical details see:
 * Installation
 
 #+BEGIN_SRC sh
-$ pip install https://github.com/krvkir/iimport
+$ pip install git+https://github.com/krvkir/iimport.git
 #+END_SRC
 
 * Examples
